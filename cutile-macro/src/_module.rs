@@ -214,10 +214,9 @@ pub fn module(attributes: TokenStream, item: TokenStream) -> TokenStream {
     let mut module_item = parse_macro_input!(item as ItemMod);
     module_item.attrs = attrs.into();
 
-    match module_inner(&module_item, &tile_rust_crate_root, raw_item_source) {
-        Ok(ts) => ts.into(),
-        Err(err) => err.to_compile_error().into(),
-    }
+    module_inner(&module_item, &tile_rust_crate_root, raw_item_source)
+    .unwrap_or_else(|Error::Syn(e)| e.to_compile_error())
+    .into()
 }
 
 /// Process the items inside a `#[cutile::module]` (or a submodule of one)
@@ -834,11 +833,12 @@ pub fn kernel_launcher(module_ident: &Ident, item: &ItemFn) -> Result<TokenStrea
         #device_op_impl
     };
 
-    let Some(_entry_attrs) = get_meta_list_by_last_segment("entry", &item.attrs) else {
-        return item.sig.ident.err(&format!(
-            "Unexpected entry point {function_name}: Missing entry annotation."
-        ));
-    };
+    let _entry_attrs = get_meta_list_by_last_segment("entry", &item.attrs).ok_or_else(|| {
+        item.sig.ident.error(&format!(
+            "Unexpected entry point {}: Missing entry annotation.",
+            function_name
+        ))
+    })?;
 
     if let Ok(dir) = env::var("DUMP_KERNEL_LAUNCHER_DIR") {
         let file = parse_file(&result.to_string()).expect("Failed to parse file.");
