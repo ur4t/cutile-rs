@@ -62,7 +62,7 @@ use syn::{
     PathArguments, ReturnType, TraitItem, Type,
 };
 
-use crate::error::{syn_err, syn_error_at, Error};
+use crate::error::{Error, SpannedError};
 
 /// Maximum rank the emitter produces rank-instance impls for. Must match the
 /// range of `Tile_N` variants produced by `#[cuda_tile::variadic_struct]`.
@@ -188,8 +188,7 @@ impl RankPolyOpSpec {
 
         let cgas = find_cgas(&item.sig.generics, fn_ident.span())?;
         if cgas.is_empty() {
-            return syn_error_at(
-                fn_ident.span(),
+            return fn_ident.err(
                 "shadow_dispatch: no `const X: [i32; N]` generic found \
                  (is this op rank-polymorphic?)",
             );
@@ -205,10 +204,9 @@ impl RankPolyOpSpec {
                     let name = match &*pat_type.pat {
                         Pat::Ident(pat_ident) => pat_ident.ident.clone(),
                         _ => {
-                            return syn_error_at(
-                                pat_type.pat.span(),
-                                "shadow_dispatch: unsupported argument pattern",
-                            );
+                            return pat_type
+                                .pat
+                                .err("shadow_dispatch: unsupported argument pattern");
                         }
                     };
                     let ty = (*pat_type.ty).clone();
@@ -235,19 +233,13 @@ impl RankPolyOpSpec {
                     });
                 }
                 FnArg::Receiver(r) => {
-                    return syn_error_at(
-                        r.span(),
-                        "shadow_dispatch: free fns only (no `self` receiver)",
-                    );
+                    return r.err("shadow_dispatch: free fns only (no `self` receiver)");
                 }
             }
         }
 
         if first_shape_bearing_ty.is_none() {
-            return syn_error_at(
-                fn_ident.span(),
-                "shadow_dispatch: no shape-bearing argument found",
-            );
+            return fn_ident.err("shadow_dispatch: no shape-bearing argument found");
         }
 
         // Return type info. Treat `()` (default / explicit unit) uniformly: no
@@ -1075,7 +1067,7 @@ fn find_cgas(generics: &Generics, _span: Span) -> Result<Vec<CgaInfo>, Error> {
                     Expr::Path(ExprPath { path, .. }) => path
                         .get_ident()
                         .cloned()
-                        .ok_or_else(|| syn_err(c.ty.span(), "CGA length must be a simple ident"))?,
+                        .ok_or_else(|| c.ty.error("CGA length must be a simple ident"))?,
                     _ => continue,
                 };
                 out.push(CgaInfo {
@@ -1681,8 +1673,7 @@ where
 pub fn desugar_variadic_trait_decl(item: &ItemTrait) -> Result<TokenStream2, Error> {
     let cgas = find_cgas(&item.generics, item.ident.span())?;
     if cgas.is_empty() {
-        return syn_error_at(
-            item.ident.span(),
+        return item.ident.err(
             "variadic_trait: no `const X: [i32; N]` generic found \
              (is this trait rank-polymorphic?)",
         );
@@ -1788,16 +1779,10 @@ pub fn desugar_variadic_trait_decl(item: &ItemTrait) -> Result<TokenStream2, Err
 pub fn desugar_variadic_trait_impl(item: &ItemImpl) -> Result<TokenStream2, Error> {
     let cgas = find_cgas(&item.generics, item.span())?;
     if cgas.is_empty() {
-        return syn_error_at(
-            item.span(),
-            "variadic_trait_impl: no `const X: [i32; N]` generic found",
-        );
+        return item.err("variadic_trait_impl: no `const X: [i32; N]` generic found");
     }
     if item.trait_.is_none() {
-        return syn_error_at(
-            item.span(),
-            "variadic_trait_impl: expected a trait impl (e.g. `impl T for X`)",
-        );
+        return item.err("variadic_trait_impl: expected a trait impl (e.g. `impl T for X`)");
     }
     let length_groups = group_cgas_by_length(&cgas);
     let rank_space = RankSpace::new(&length_groups, MAX_RANK);
@@ -1868,8 +1853,7 @@ pub fn desugar_variadic_trait_impl(item: &ItemImpl) -> Result<TokenStream2, Erro
     // that's neither in args nor in any return), the impl can't substitute
     // the trait-arg slot — surface a clear error.
     if shape.has_free_cga && return_type_for_out.is_none() {
-        return syn_error_at(
-            item.span(),
+        return item.err(
             "variadic_trait_impl: free CGAs detected but no method has a return \
              type that uses them — cannot substitute case-3c trait args",
         );

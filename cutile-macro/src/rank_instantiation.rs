@@ -62,7 +62,7 @@
 //! variadic types and no return-type inference — a path is "rank-polymorphic"
 //! because it has CGA args, full stop.
 
-use crate::error::{syn_err, Error};
+use crate::error::{Error, SpannedError};
 use cutile_compiler::syn_utils::*;
 use cutile_compiler::types::parse_signed_literal_as_i32;
 use proc_macro2::{Ident, Span, TokenTree};
@@ -149,23 +149,17 @@ impl RankBindings {
         {
             let length_instance = *length_instance as u32;
             if length_var_name != &cga.length_var {
-                return Err(syn_err(
-                    Span::call_site(),
-                    &format!(
-                        "CGA length var name mismatch: expected '{}', got '{}'",
-                        cga.length_var, length_var_name
-                    ),
+                return Span::call_site().err(&format!(
+                    "CGA length var name mismatch: expected '{}', got '{}'",
+                    cga.length_var, length_var_name
                 ));
             }
             if let Some(existing_length) = inst_u32.insert(length_var_name.clone(), length_instance)
             {
                 if existing_length != length_instance {
-                    return Err(syn_err(
-                        Span::call_site(),
-                        &format!(
-                            "CGA length instance mismatch for '{}': expected {}, got {}",
-                            length_var_name, existing_length, length_instance
-                        ),
+                    return Span::call_site().err(&format!(
+                        "CGA length instance mismatch for '{}': expected {}, got {}",
+                        length_var_name, existing_length, length_instance
                     ));
                 }
             }
@@ -196,12 +190,9 @@ impl RankBindings {
         let mut result = self.clone();
         for cga in var_cgas {
             if !result.inst_u32.contains_key(&cga.length_var) {
-                return Err(syn_err(
-                    Span::call_site(),
-                    &format!(
-                        "instantiate_var_cgas: Missing inst_u32 entry for '{}'",
-                        cga.length_var
-                    ),
+                return Span::call_site().err(&format!(
+                    "instantiate_var_cgas: Missing inst_u32 entry for '{}'",
+                    cga.length_var
                 ));
             }
             let n = result.inst_u32.get(&cga.length_var).unwrap();
@@ -220,12 +211,9 @@ impl RankBindings {
             let n: u32 = n_list[i];
             let cga = &var_cgas[i];
             if result.inst_u32.contains_key(&cga.length_var) {
-                return Err(syn_err(
-                    Span::call_site(),
-                    &format!(
-                        "instantiate_new_var_cgas: inst_u32 already contains entry for '{}'",
-                        cga.length_var
-                    ),
+                return Span::call_site().err(&format!(
+                    "instantiate_new_var_cgas: inst_u32 already contains entry for '{}'",
+                    cga.length_var
                 ));
             }
             result.inst_u32.insert(cga.length_var.clone(), n);
@@ -270,17 +258,12 @@ impl VariadicLengthIterator {
         {
             for var in variadic_length_vars {
                 let len = (attribute_list.parse_int(var.as_str()).ok_or_else(|| {
-                    syn_err(
-                        Span::call_site(),
-                        &format!("Missing attribute value for '{var}'"),
-                    )
+                    Span::call_site().error(&format!("Missing attribute value for '{var}'"))
                 })? + 1) as usize;
                 i_max *= len;
                 if variadic_lengths.insert(var.clone(), len).is_some() {
-                    return Err(syn_err(
-                        Span::call_site(),
-                        &format!("Duplicate variadic_length_var '{var}'"),
-                    ));
+                    return Span::call_site()
+                        .err(&format!("Duplicate variadic_length_var '{var}'"));
                 }
             }
         }
@@ -290,17 +273,11 @@ impl VariadicLengthIterator {
             cga_length_vars.push(var.clone());
             // This is so we don't need to explicitly specify the variadic_length_vars attribute.
             let len = (attribute_list.parse_int(var.as_str()).ok_or_else(|| {
-                syn_err(
-                    Span::call_site(),
-                    &format!("Missing attribute value for '{var}'"),
-                )
+                Span::call_site().error(&format!("Missing attribute value for '{var}'"))
             })? + 1) as usize;
             if variadic_lengths.contains_key(&var) {
                 if *variadic_lengths.get(&var).unwrap() != len {
-                    return Err(syn_err(
-                        Span::call_site(),
-                        &format!("Variadic length mismatch for '{var}'"),
-                    ));
+                    return Span::call_site().err(&format!("Variadic length mismatch for '{var}'"));
                 }
             } else {
                 i_max *= len;
@@ -502,16 +479,15 @@ pub fn variadic_struct(
                     }}
                 "#
                 );
-                let parsed_impl =
-                    syn::parse::<ItemImpl>(constructor_impl.parse().map_err(|_| {
-                        syn_err(item.ident.span(), "Failed to parse constructor impl")
-                    })?)
-                    .map_err(|e| {
-                        syn_err(
-                            item.ident.span(),
-                            &format!("Failed to parse constructor impl: {e}"),
-                        )
-                    })?;
+                let parsed_impl = syn::parse::<ItemImpl>(
+                    constructor_impl
+                        .parse()
+                        .map_err(|_| item.ident.error("Failed to parse constructor impl"))?,
+                )
+                .map_err(|e| {
+                    item.ident
+                        .error(&format!("Failed to parse constructor impl: {e}"))
+                })?;
                 Some(parsed_impl)
             }
         } else {
@@ -606,31 +582,28 @@ fn rewrite_generics_for_rank(
                         .inst_array
                         .get(const_param_name.as_str())
                         .ok_or_else(|| {
-                            syn_err(
-                                const_param.ident.span(),
-                                &format!("Missing inst_array entry for '{const_param_name}'"),
-                            )
+                            const_param.ident.error(&format!(
+                                "Missing inst_array entry for '{const_param_name}'"
+                            ))
                         })?;
                     if cga.element_type != "i32" {
-                        return Err(syn_err(
-                            const_param.ident.span(),
-                            &format!("Expected element_type 'i32', got '{}'", cga.element_type),
+                        return const_param.ident.err(&format!(
+                            "Expected element_type 'i32', got '{}'",
+                            cga.element_type
                         ));
                     }
                     for i in 0..cga.length {
                         let const_str = format!("const {}{}: {}", cga.name, i, cga.element_type);
                         let generic_param =
                             syn::parse::<GenericParam>(const_str.parse().map_err(|_| {
-                                syn_err(
-                                    const_param.ident.span(),
-                                    &format!("Failed to parse generic param '{const_str}'"),
-                                )
+                                const_param
+                                    .ident
+                                    .error(&format!("Failed to parse generic param '{const_str}'"))
                             })?)
                             .map_err(|e| {
-                                syn_err(
-                                    const_param.ident.span(),
-                                    &format!("Failed to parse generic param '{const_str}': {e}"),
-                                )
+                                const_param.ident.error(&format!(
+                                    "Failed to parse generic param '{const_str}': {e}"
+                                ))
                             })?;
                         concrete_type_params.push(generic_param);
                     }
@@ -650,12 +623,10 @@ fn instantiate_cga(
     instances: &RankBindings,
 ) -> Result<AngleBracketedGenericArguments, Error> {
     let _result_path = path.clone();
-    let last_seg = path.segments.last().ok_or_else(|| {
-        syn_err(
-            path.span(),
-            "Expected at least one path segment in instantiate_cga",
-        )
-    })?;
+    let last_seg = path
+        .segments
+        .last()
+        .ok_or_else(|| path.error("Expected at least one path segment in instantiate_cga"))?;
     let param_name = last_seg.ident.to_string();
     // Is it a variadic type or is it expecting a variadic type parameter?
     if instances.inst_array.contains_key(&param_name) {
@@ -668,22 +639,20 @@ fn instantiate_cga(
         let formatted = format!("<{}>", generic_args_result.join(","));
         Ok(
             syn::parse::<AngleBracketedGenericArguments>(formatted.parse().map_err(|_| {
-                syn_err(
-                    path.span(),
-                    &format!("Failed to parse angle bracketed args '{formatted}'"),
-                )
+                path.error(&format!(
+                    "Failed to parse angle bracketed args '{formatted}'"
+                ))
             })?)
             .map_err(|e| {
-                syn_err(
-                    path.span(),
-                    &format!("Failed to parse angle bracketed args '{formatted}': {e}"),
-                )
+                path.error(&format!(
+                    "Failed to parse angle bracketed args '{formatted}': {e}"
+                ))
             })?,
         )
     } else {
-        Err(syn_err(
-            path.span(),
-            &format!("{} is not a const generic array.", path.to_token_stream()),
+        path.err(&format!(
+            "{} is not a const generic array.",
+            path.to_token_stream()
         ))
     }
 }
@@ -720,12 +689,9 @@ fn rewrite_path_for_rank(
         if instances.inst_array.contains_key(&param_name) {
             // The type is a const generic array: f(..., shape: D) -> ()
             // The result produced by this case is not supported syntax.
-            return Err(syn_err(
-                seg.ident.span(),
-                &format!(
-                    "Unexpected use of rewrite_path_for_rank for {}",
-                    path.to_token_stream()
-                ),
+            return seg.ident.err(&format!(
+                "Unexpected use of rewrite_path_for_rank for {}",
+                path.to_token_stream()
             ));
         } else {
             // The last segment of an expression path names a fn/associated
@@ -742,7 +708,7 @@ fn rewrite_path_for_rank(
                     )
                 }
                 PathArguments::None => (seg.ident.clone(), PathArguments::None),
-                _ => return Err(syn_err(seg.ident.span(), "Unexpected Path arguments.")),
+                _ => return seg.ident.err("Unexpected Path arguments."),
             };
             let result_seg = PathSegment {
                 ident: last_type_ident,
@@ -803,10 +769,7 @@ fn rewrite_type_for_rank(ty: &Type, instances: &RankBindings) -> Result<Type, Er
             // Special case: For Option<T>, recursively desugar T but don't try to
             // expand Option itself as a variadic type
             let last_segment = type_path.path.segments.last().ok_or_else(|| {
-                syn_err(
-                    type_path.span(),
-                    "Expected at least one path segment in rewrite_type_for_rank",
-                )
+                type_path.error("Expected at least one path segment in rewrite_type_for_rank")
             })?;
             if last_segment.ident == "Option" {
                 let mut result_type = type_path.clone();
@@ -838,16 +801,10 @@ fn rewrite_type_for_rank(ty: &Type, instances: &RankBindings) -> Result<Type, Er
             if instances.inst_u32.contains_key(&arr_len) {
                 let n = instances.inst_u32.get(&arr_len).unwrap();
                 result.len = syn::parse::<Expr>(format!("{}", n).parse().map_err(|_| {
-                    syn_err(
-                        type_array.span(),
-                        &format!("Failed to parse array length '{n}'"),
-                    )
+                    type_array.error(&format!("Failed to parse array length '{n}'"))
                 })?)
                 .map_err(|e| {
-                    syn_err(
-                        type_array.span(),
-                        &format!("Failed to parse array length '{n}': {e}"),
-                    )
+                    type_array.error(&format!("Failed to parse array length '{n}': {e}"))
                 })?;
             }
             result.into()
@@ -890,9 +847,7 @@ fn instantiate_cga_args(
                             .path
                             .segments
                             .last()
-                            .ok_or_else(|| {
-                                syn_err(type_path.span(), "Expected at least one path segment")
-                            })?
+                            .ok_or_else(|| type_path.error("Expected at least one path segment"))?
                             .ident
                             .to_string();
                         if instances.inst_array.contains_key(&last_ident) {
@@ -931,17 +886,14 @@ fn instantiate_cga_args(
                         // TODO (hme): Would be great to get rid of this syntax.
                         // This is something like Tensor<E, {[...]}>
                         if block_expr.block.stmts.len() != 1 {
-                            return Err(syn_err(
-                                block_expr.span(),
-                                &format!(
-                                    "Expected exactly 1 statement in block expression, got {}",
-                                    block_expr.block.stmts.len()
-                                ),
+                            return block_expr.err(&format!(
+                                "Expected exactly 1 statement in block expression, got {}",
+                                block_expr.block.stmts.len()
                             ));
                         }
                         let statement = &block_expr.block.stmts[0];
                         let Stmt::Expr(statement_expr, _) = statement else {
-                            return Err(syn_err(block_expr.span(), "Unexpected block expression."));
+                            return block_expr.err("Unexpected block expression.");
                         };
                         match statement_expr {
                             Expr::Array(array_expr) => {
@@ -966,12 +918,9 @@ fn instantiate_cga_args(
                                         // This is something like Tensor<E, {[-1; N]}>
                                         let num_rep_var = len_path.to_token_stream().to_string();
                                         if !instances.inst_u32.contains_key(&num_rep_var) {
-                                            return Err(syn_err(
-                                                len_path.span(),
-                                                &format!(
-                                                    "Expected instance for generic argument {}",
-                                                    num_rep_var
-                                                ),
+                                            return len_path.err(&format!(
+                                                "Expected instance for generic argument {}",
+                                                num_rep_var
                                             ));
                                         }
                                         let num_repetitions =
@@ -988,24 +937,16 @@ fn instantiate_cga_args(
                                             .to_string()
                                             .parse::<u32>()
                                             .map_err(|e| {
-                                                syn_err(
-                                                    len_lit.span(),
-                                                    &format!(
-                                                        "Failed to parse repeat length as u32: {e}"
-                                                    ),
-                                                )
+                                                len_lit.error(&format!(
+                                                    "Failed to parse repeat length as u32: {e}"
+                                                ))
                                             })?;
                                         for _ in 0..num_repetitions {
                                             generic_args_result.push(thing_to_repeat.clone());
                                         }
                                         num_repetitions
                                     }
-                                    _ => {
-                                        return Err(syn_err(
-                                            generic_args.span(),
-                                            "Unexpected repeat expression.",
-                                        ))
-                                    }
+                                    _ => return generic_args.err("Unexpected repeat expression."),
                                 };
                                 instantiated_param_name = if skip_suffix {
                                     type_ident.to_string()
@@ -1013,12 +954,7 @@ fn instantiate_cga_args(
                                     concrete_name(&type_ident.to_string(), &[num_repetitions])
                                 };
                             }
-                            _ => {
-                                return Err(syn_err(
-                                    block_expr.span(),
-                                    "Unexpected block expression.",
-                                ))
-                            }
+                            _ => return block_expr.err("Unexpected block expression."),
                         }
                     }
                     Expr::Lit(lit_expr) => {
@@ -1039,16 +975,14 @@ fn instantiate_cga_args(
     Ok((
         instantiated_param_ident,
         syn::parse::<AngleBracketedGenericArguments>(formatted.parse().map_err(|_| {
-            syn_err(
-                type_ident.span(),
-                &format!("Failed to parse angle bracketed args '{formatted}'"),
-            )
+            type_ident.error(&format!(
+                "Failed to parse angle bracketed args '{formatted}'"
+            ))
         })?)
         .map_err(|e| {
-            syn_err(
-                type_ident.span(),
-                &format!("Failed to parse angle bracketed args '{formatted}': {e}"),
-            )
+            type_ident.error(&format!(
+                "Failed to parse angle bracketed args '{formatted}': {e}"
+            ))
         })?,
     ))
 }
@@ -1131,10 +1065,7 @@ impl RankInstantiator {
         if let Some(trait_) = &mut item.trait_ {
             let path = &mut trait_.1;
             if path.segments.is_empty() {
-                return Err(syn_err(
-                    path.span(),
-                    "Expected at least one path segment in trait path",
-                ));
+                return path.err("Expected at least one path segment in trait path");
             }
             let last_seg = path.segments.last_mut().unwrap();
             if let PathArguments::AngleBracketed(path_args) = &mut last_seg.arguments {
@@ -1169,7 +1100,7 @@ impl RankInstantiator {
                     }
                     impl_items.push(ImplItem::Fn(result));
                 }
-                _ => return Err(syn_err(item_in_impl.span(), "Unsupported impl item.")),
+                _ => return item_in_impl.err("Unsupported impl item."),
             }
         }
         item.items = impl_items;
@@ -1218,10 +1149,7 @@ impl RankInstantiator {
                 }
                 TokenTree::Punct(p) if p.as_char() == ',' => continue,
                 other => {
-                    return Err(syn_err(
-                        mac.span(),
-                        &format!("Unexpected token in {kind}!: {:?}", other),
-                    ));
+                    return mac.err(&format!("Unexpected token in {kind}!: {:?}", other));
                 }
             }
         }
@@ -1233,7 +1161,7 @@ impl RankInstantiator {
         };
         let expr_str = format!("{ty_str}::<{cga_str}>::const_new()");
         syn::parse_str::<Expr>(&expr_str)
-            .map_err(|e| syn_err(mac.span(), &format!("Failed to parse '{expr_str}': {e}")))
+            .map_err(|e| mac.error(&format!("Failed to parse '{expr_str}': {e}")))
     }
 }
 
@@ -1291,13 +1219,10 @@ impl VisitMut for RankInstantiator {
                 if let Some(cga) = self.bindings.inst_array.get(&name).cloned() {
                     let i = parse_signed_literal_as_i32(&ei.index);
                     if !(0 <= i && (i as u32) < cga.length) {
-                        self.error = Some(syn_err(
-                            ei.index.span(),
-                            &format!(
-                                "Index {i} out of bounds for CGA `{}` of length {}",
-                                cga.name, cga.length
-                            ),
-                        ));
+                        self.error = Some(ei.index.error(&format!(
+                            "Index {i} out of bounds for CGA `{}` of length {}",
+                            cga.name, cga.length
+                        )));
                         return;
                     }
                     let dim_ident = Ident::new(&format!("{}{}", cga.name, i as u32), p.span());

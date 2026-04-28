@@ -215,8 +215,8 @@ pub fn module(attributes: TokenStream, item: TokenStream) -> TokenStream {
     module_item.attrs = attrs.into();
 
     module_inner(&module_item, &tile_rust_crate_root, raw_item_source)
-    .unwrap_or_else(|Error::Syn(e)| e.to_compile_error())
-    .into()
+        .unwrap_or_else(|Error::Syn(e)| e.to_compile_error())
+        .into()
 }
 
 /// Process the items inside a `#[cutile::module]` (or a submodule of one)
